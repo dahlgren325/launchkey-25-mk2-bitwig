@@ -23,6 +23,8 @@ var isCursorDevice;
 var trackBank;
 var blink = false;
 var blinkRate = 200;
+var translationTableEnabled;
+var translationTableDisabled;
 
 // Remove this if you want to be able to use deprecated methods without causing script to stop.
 // This is useful during development.
@@ -47,12 +49,17 @@ if (host.platformIsWindows()) {
 function init() {
 	currentMode = PLAY;
 
-	// Note on, note off, modulation, channel pressure, pitch bend
+	// Note off, note on, modulation, channel pressure, pitch bend
 	host.getMidiInPort(0).createNoteInput("Keys", "8?????", "9?????", "B?01??"/*, "D0????"*/, "E?????");
 	//host.getMidiInPort(0).setMidiCallback(onMidi0);
 	host.getMidiInPort(1).setMidiCallback(onMidi1);
 	//host.getMidiInPort(0).setSysexCallback(onSysex0);
 	//host.getMidiInPort(1).setSysexCallback(onSysex1);
+	translationTableEnabled = createDrumPadNoteTranslationTable(true);
+	translationTableDisabled = createDrumPadNoteTranslationTable(false);
+	padsNoteInput = host.getMidiInPort(1).createNoteInput("Pads", "8f6???", "9f6???", "8f7???", "9f7???");
+	padsNoteInput.setKeyTranslationTable(translationTableDisabled);
+	padsNoteInput.setShouldConsumeEvents(false);
 
 	// Enable extended mode
 	host.getMidiOutPort(1).sendMidi(0x9f, 0x0C, 0x7f);
@@ -60,8 +67,6 @@ function init() {
 	// Create various device controller objects
 	cursorTrack = host.createCursorTrack(0, 0);
 	cursorDevice = cursorTrack.createCursorDevice();
-	padsNoteInput = host.getMidiInPort(0).createNoteInput("Pads");
-	padsNoteInput.setShouldConsumeEvents(false);
 	transport = host.createTransport();
 	masterTrack = host.createMasterTrack(0);
 	popupBrowser = host.createPopupBrowser();
@@ -127,6 +132,19 @@ function init() {
 function blinkTimer() {
 	blink = !blink;
 	host.scheduleTask(blinkTimer, blinkRate);
+}
+
+function createDrumPadNoteTranslationTable(enabled) {
+	//return (status == 0x9f || status == 0x8f) && data1 >= 0x60 && data1 <= 0x77 && !(data1 >= 0x68 && data1 <= 0x6f);
+	var translationTable = [];
+	for (i = 0; i < 128; i++) {
+		if (enabled && ((i >= 0x60 && i <= 0x67) || (i >= 0x70 && i <= 0x77))) {
+			translationTable[i] = drumKeyToNote(i);
+		} else {
+			translationTable[i] = -1;
+		}
+	}
+	return translationTable;
 }
 
 // Called when a MIDI sysex message is received on MIDI input port 0.
@@ -197,24 +215,28 @@ function isDrumPadMidiEvent(status, data1, data2) {
 }
 
 function onSquarePad(status, data1, data2) {
-	if (currentMode == DRUM) {
-		padsNoteInput.sendRawMidiEvent(status, drumKeyToNote(data1), data2);
-	} else if (currentMode == PLAY) {
+	if (currentMode == PLAY) {
 		if (popupBrowser.exists().get()) {
 			if (data2 > 0) {
 				popupBrowser.cancel();
 			}
 		} else if (data1 >= 96 && data1 < 104) { // Row 1
 			remoteControls.selectedPageIndex().set(data1 - 96);
-		} else { // Row 2
+		} else if (data2 > 0) { // Row 2
 			var device = deviceBank.getDevice(data1 - 112);
 			if (device.exists().get()) {
 				cursorDevice.selectDevice(device);
-			} else if (data2 > 0) {
+				//host.scheduleTask(() => {
+				//	remoteControls.selectNextPage(true);
+				//	host.scheduleTask(() => {
+				//		remoteControls.selectPreviousPage(true);
+				//	}, 15);
+				//}, 15);
+			} else {
 				device.deviceChain().endOfDeviceChainInsertionPoint().browse();
 			}
 		}
-	} else { // LAUNCH mode
+	} else if (currentMode == LAUNCH) { // LAUNCH mode
 		var column, row;
 		if (data1 >= 96 && data1 < 104) {
 			column = data1 - 96;
@@ -301,7 +323,7 @@ function drumKeyToNote(key) {
 		return 36 + key - 112;
 	}
 	if (key >= 116 && key < 120) {
-		return 44 + key-116;
+		return 44 + key - 116;
 	}
 	if (key >= 96 && key < 100) {
 		return 40 + key - 96;
@@ -319,6 +341,7 @@ function setPlayModeExtended() {
 		host.getMidiOutPort(1).sendMidi(0x9f, 0x0d, 0x7f);
 		host.showPopupNotification("PLAY mode");
 		currentMode = PLAY;
+		padsNoteInput.setKeyTranslationTable(translationTableDisabled);
 		for (var i = 0; i < 16; i++) {
 			drumPads[i].invalidate();
 		}
@@ -335,6 +358,7 @@ function setLaunchMode() {
 		host.getMidiOutPort(1).sendMidi(0x9f, 0x0f, 0x7f);
 		host.showPopupNotification("LAUNCH mode");
 		currentMode = LAUNCH;
+		padsNoteInput.setKeyTranslationTable(translationTableDisabled);
 		for (var i = 0; i < 16; i++) {
 			drumPads[i].invalidate();
 		}
@@ -351,6 +375,7 @@ function setDrumModeExtended() {
 		host.getMidiOutPort(1).sendMidi(0x9f, 0x0f, 0x7f);
 		host.showPopupNotification("DRUM mode");
 		currentMode = DRUM;
+		padsNoteInput.setKeyTranslationTable(translationTableEnabled);
 		for (var i = 0; i < 16; i++) {
 			drumPads[i].invalidate();
 		}
