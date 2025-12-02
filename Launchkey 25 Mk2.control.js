@@ -58,7 +58,7 @@ function init() {
 	translationTableEnabled = createDrumPadNoteTranslationTable(true);
 	translationTableDisabled = createDrumPadNoteTranslationTable(false);
 	padsNoteInput = host.getMidiInPort(1).createNoteInput("Pads", "8f6???", "9f6???", "8f7???", "9f7???");
-	padsNoteInput.setKeyTranslationTable(translationTableDisabled);
+	padsNoteInput.setKeyTranslationTable(currentMode == DRUM ? translationTableEnabled : translationTableDisabled);
 	padsNoteInput.setShouldConsumeEvents(false);
 
 	// Enable extended mode
@@ -81,7 +81,6 @@ function init() {
 
 	// Mark interests
 	cursorTrack.color().markInterested();
-	drumPadBank.getItemAt(0).exists().markInterested();
 	cursorDevice.exists().markInterested();
 	cursorTrack.playingNotes().markInterested();
 	popupBrowser.exists().markInterested();
@@ -89,6 +88,11 @@ function init() {
 	remoteControls.selectedPageIndex().markInterested();
 	deviceBank.itemCount().markInterested();
 
+	for (var i = 0; i < 16; i++) {
+		var drumPad = drumPadBank.getItemAt(i);
+		drumPad.exists().markInterested();
+		drumPad.color().markInterested();
+	}
 	for (var i = 0; i < 8; i++) {
 		var parameter = remoteControls.getParameter(i);
 		parameter.markInterested();
@@ -389,18 +393,15 @@ function flush() {
 	if (currentMode == DRUM) {
 		var white = 3;
 		var offColor = 0;
-		var trackColor = -1;
 		for (var i = 0; i < 16; i++) {
 			var key = drumPadToKey(i);
 			if (cursorTrack.playingNotes().isNotePlaying(key)) {
 				drumPads[i].setColor(white);
 				drumPads[i].flush();
 			} else {
-				if (trackColor = -1) {
-					trackColor = getColorIndexClosestToColorRGB(cursorTrack.color().get());
-				}
-				if (drumPadBank.getItemAt(0).exists().get()) {
-					drumPads[i].setColor(trackColor);
+				var drumPad = drumPadBank.getItemAt(drumPadToKey(i) - 36);
+				if (drumPad.exists().get()) {
+					drumPads[i].setColor(getColorIndexClosestToColorRGB(drumPad.color().get()));
 					drumPads[i].flush();
 				} else {
 					drumPads[i].setColor(offColor);
