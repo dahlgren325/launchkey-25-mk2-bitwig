@@ -1,6 +1,5 @@
 loadAPI(24);
 
-var ignoreModeChange = false;
 var PLAY = 1;
 var DRUM = 2;
 var LAUNCH = 3;
@@ -25,6 +24,7 @@ var blink = false;
 var blinkRate = 200;
 var translationTableEnabled;
 var translationTableDisabled;
+var hardwareSurface;
 
 // Remove this if you want to be able to use deprecated methods without causing script to stop.
 // This is useful during development.
@@ -52,14 +52,14 @@ function init() {
 	// Note off, note on, modulation, channel pressure, pitch bend
 	host.getMidiInPort(0).createNoteInput("Keys", "8?????", "9?????", "B?01??"/*, "D0????"*/, "E?????");
 	//host.getMidiInPort(0).setMidiCallback(onMidi0);
-	host.getMidiInPort(1).setMidiCallback(onMidi1);
+	var midiIn1 = host.getMidiInPort(1);
+	midiIn1.setMidiCallback(onMidi1);
 	//host.getMidiInPort(0).setSysexCallback(onSysex0);
 	//host.getMidiInPort(1).setSysexCallback(onSysex1);
 	translationTableEnabled = createDrumPadNoteTranslationTable(true);
 	translationTableDisabled = createDrumPadNoteTranslationTable(false);
-	padsNoteInput = host.getMidiInPort(1).createNoteInput("Pads", "8f6???", "9f6???", "8f7???", "9f7???");
+	padsNoteInput = midiIn1.createNoteInput("Pads", "8f6???", "9f6???", "8f7???", "9f7???");
 	padsNoteInput.setKeyTranslationTable(currentMode == DRUM ? translationTableEnabled : translationTableDisabled);
-	padsNoteInput.setShouldConsumeEvents(false);
 
 	// Enable extended mode
 	host.getMidiOutPort(1).sendMidi(0x9f, 0x0C, 0x7f);
@@ -87,7 +87,6 @@ function init() {
 	remoteControls.pageCount().markInterested();
 	remoteControls.selectedPageIndex().markInterested();
 	deviceBank.itemCount().markInterested();
-
 	for (var i = 0; i < 16; i++) {
 		var drumPad = drumPadBank.getItemAt(i);
 		drumPad.exists().markInterested();
@@ -128,9 +127,115 @@ function init() {
 		slot.color().markInterested();
 	}
 
+	createHardware(midiIn1);
+
 	blinkTimer();
 
 	println("Launchkey 25 Mk2 initialized!");
+}
+
+function createHardware(midiIn1) {
+	// Hardware
+	hardwareSurface = host.createHardwareSurface();
+
+	var masterVolumeSlider = hardwareSurface.createHardwareSlider("MASTER_VOLUME");
+	masterVolumeSlider.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0, 7));
+	masterVolumeSlider.setBinding(masterTrack.volume());
+
+	var previousTrackButton = hardwareSurface.createHardwareButton("PREVIOUS_TRACK_BUTTON");
+	previousTrackButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x66, 0x7f));
+	previousTrackButton.pressedAction().setBinding(host.createCallbackAction(previousTrack, null));
+
+	var nextTrackButton = hardwareSurface.createHardwareButton("NEXT_TRACK_BUTTON");
+	nextTrackButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x67, 0x7f));
+	nextTrackButton.pressedAction().setBinding(host.createCallbackAction(nextTrack, null));
+
+	var rewindButton = hardwareSurface.createHardwareButton("REWIND_BUTTON");
+	rewindButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x70, 0x7f));
+	rewindButton.pressedAction().setBinding(host.createCallbackAction(previousScene, null));
+
+	var forwardButton = hardwareSurface.createHardwareButton("FORWARD_BUTTON");
+	forwardButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x71, 0x7f));
+	forwardButton.pressedAction().setBinding(host.createCallbackAction(nextScene, null));
+
+	var stopButton = hardwareSurface.createHardwareButton("STOP_BUTTON");
+	stopButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x72, 0x7f));
+	stopButton.pressedAction().setBinding(transport.stopAction());
+
+	var playButton = hardwareSurface.createHardwareButton("PLAY_BUTTON");
+	playButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x73, 0x7f));
+	playButton.pressedAction().setBinding(transport.playAction());
+
+	var loopButton = hardwareSurface.createHardwareButton("LOOP_BUTTON");
+	loopButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x74, 0x7f));
+	loopButton.pressedAction().setBinding(transport.isArrangerLoopEnabled().toggleAction());
+
+	var recordButton = hardwareSurface.createHardwareButton("RECORD_BUTTON");
+	recordButton.pressedAction().setActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x75, 0x7f));
+	recordButton.pressedAction().setBinding(transport.recordAction());
+
+	var inControl1Button = hardwareSurface.createHardwareButton("INCONTROL_1");
+	inControl1Button.pressedAction().setActionMatcher(midiIn1.createActionMatcher("status == 0x9f && data1 == 0x0d && data2 == 0"));
+	inControl1Button.pressedAction().setBinding(host.createCallbackAction(setPlayMode, null));
+
+	var inControl2Button = hardwareSurface.createHardwareButton("INCONTROL_2");
+	inControl2Button.pressedAction().setActionMatcher(midiIn1.createActionMatcher("status == 0x9f && data1 == 0x0f && data2 == 0"));
+	inControl2Button.pressedAction().setBinding(host.createCallbackAction(setDrumOrLaunchMode, null));
+
+	var roundButton1 = hardwareSurface.createHardwareButton("ROUND_1");
+	roundButton1.pressedAction().setActionMatcher(midiIn1.createActionMatcher("status == 0x9f && data1 == 0x68 && data2 == 0x7f"));
+	roundButton1.pressedAction().setBinding(host.createCallbackAction(onRoundPad1, null));
+
+	var roundButton2 = hardwareSurface.createHardwareButton("ROUND_2");
+	roundButton2.pressedAction().setActionMatcher(midiIn1.createActionMatcher("status == 0x9f && data1 == 0x78 && data2 == 0x7f"));
+	roundButton2.pressedAction().setBinding(host.createCallbackAction(onRoundPad2, null));
+
+	var knob1 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_1");
+	knob1.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x15));
+	knob1.setBinding(remoteControls.getParameter(0));
+
+	var knob2 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_2");
+	knob2.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x16));
+	knob2.setBinding(remoteControls.getParameter(1));
+
+	var knob3 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_3");
+	knob3.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x17));
+	knob3.setBinding(remoteControls.getParameter(2));
+
+	var knob4 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_4");
+	knob4.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x18));
+	knob4.setBinding(remoteControls.getParameter(3));
+
+	var knob5 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_5");
+	knob5.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x19));
+	knob5.setBinding(remoteControls.getParameter(4));
+
+	var knob6 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_6");
+	knob6.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x1a));
+	knob6.setBinding(remoteControls.getParameter(5));
+
+	var knob7 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_7");
+	knob7.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x1b));
+	knob7.setBinding(remoteControls.getParameter(6));
+
+	var knob8 = hardwareSurface.createAbsoluteHardwareKnob("KNOB_8");
+	knob8.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0xf, 0x1c));
+	knob8.setBinding(remoteControls.getParameter(7));
+
+	// Create a dummy button as target for button releases to avoid invoking onMidi1
+	var voidButton = hardwareSurface.createHardwareButton("VOID_BUTTON");
+	var am = host.createOrHardwareActionMatcher(midiIn1.createCCActionMatcher(0xf, 0x66, 0x00), midiIn1.createCCActionMatcher(0xf, 0x67, 0x00));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createCCActionMatcher(0xf, 0x70, 0x00));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createCCActionMatcher(0xf, 0x71, 0x00));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createCCActionMatcher(0xf, 0x72, 0x00));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createCCActionMatcher(0xf, 0x73, 0x00));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createCCActionMatcher(0xf, 0x74, 0x00));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createCCActionMatcher(0xf, 0x75, 0x00));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createActionMatcher("status == 0x9f && data1 == 0x0d && data2 == 0x7f"));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createActionMatcher("status == 0x9f && data1 == 0x0f && data2 == 0x7f"));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createNoteOffActionMatcher(0xf, 0x68));
+	am = host.createOrHardwareActionMatcher(am, midiIn1.createNoteOffActionMatcher(0xf, 0x78));
+	voidButton.pressedAction().setActionMatcher(am);
 }
 
 function blinkTimer() {
@@ -139,7 +244,6 @@ function blinkTimer() {
 }
 
 function createDrumPadNoteTranslationTable(enabled) {
-	//return (status == 0x9f || status == 0x8f) && data1 >= 0x60 && data1 <= 0x77 && !(data1 >= 0x68 && data1 <= 0x6f);
 	var translationTable = [];
 	for (i = 0; i < 128; i++) {
 		if (enabled && ((i >= 0x60 && i <= 0x67) || (i >= 0x70 && i <= 0x77))) {
@@ -171,47 +275,9 @@ function createDrumPadNoteTranslationTable(enabled) {
 function onMidi1(status, data1, data2) {
 	//println("Midi 1");
 	//printMidi(status, data1, data2);
-	if (isChannelController(status)) {
-		if (data1 == 0x07) { // Volume
-			masterTrack.volume().set(data2, 128);
-		} else if (data1 == 0x70 && data2 == 0x7f) { // Rewind
-			previousScene();
-		} else if (data1 == 0x71 && data2 == 0x7f) { // Forward
-			nextScene();
-		} else if (data1 == 0x72 && data2 == 0x7f) { // Stop
-			transport.stop();
-		} else if (data1 == 0x73 && data2 == 0x7f) { // Play
-			transport.play();
-		} else if (data1 == 0x74 && data2 == 0x7f) { // Loop
-			transport.isArrangerLoopEnabled().toggle();
-		} else if (data1 == 0x75 && data2 == 0x7f) { // Record
-			transport.record();
-		} else if (data1 == 0x66 && data2 == 0x7f) { // Previous track
-			previousTrack();
-		} else if (data1 == 0x67 && data2 == 0x7f) { // Next track
-			nextTrack();
-		} else if (isKnobMidiEvent(status, data1, data2)) { // Knob
-			remoteControls.getParameter(data1 - 0x15).set(data2, 128);
-		}
-	} else if (status == 0x9f && data1 == 0x0f) { // Drum mode
-		if (currentMode == DRUM) { // Make it possible to set launch mode in the Mk2 (no 3rd InControl button)
-			setLaunchMode();
-		} else {
-			setDrumModeExtended();
-		}
-	} else if (status == 0x9f && data1 == 0x0d) { // Play mode extended
-		setPlayModeExtended();
-	} else if (status == 0x9f && data1 == 0x68 && data2 == 0x7f) { // Top round button
-		onRoundPad(0, data2);
-	} else if (status == 0x9f && data1 == 0x78 && data2 == 0x7f) { // Bottom round button
-		onRoundPad(1, data2);
-	} else if (isDrumPadMidiEvent(status, data1, data2)) {
+	if (isDrumPadMidiEvent(status, data1, data2)) {
 		onSquarePad(status, data1, data2);
 	}
-}
-
-function isKnobMidiEvent(status, data1, data2) {
-	return status == 0xbf && data1 >= 0x15 && data1 <= 0x1c;
 }
 
 function isDrumPadMidiEvent(status, data1, data2) {
@@ -230,12 +296,6 @@ function onSquarePad(status, data1, data2) {
 			var device = deviceBank.getDevice(data1 - 112);
 			if (device.exists().get()) {
 				cursorDevice.selectDevice(device);
-				//host.scheduleTask(() => {
-				//	remoteControls.selectNextPage(true);
-				//	host.scheduleTask(() => {
-				//		remoteControls.selectPreviousPage(true);
-				//	}, 15);
-				//}, 15);
 			} else {
 				device.deviceChain().endOfDeviceChainInsertionPoint().browse();
 			}
@@ -306,14 +366,22 @@ function nextTrack() {
 	}
 }
 
-function onRoundPad(pad, value) {
-	if (popupBrowser.exists().get() && value > 0) {
+function onRoundPad1() {
+	onRoundPad(0);
+}
+
+function onRoundPad2() {
+	onRoundPad(1);
+}
+
+function onRoundPad(pad) {
+	if (popupBrowser.exists().get()) {
 		if (pad == 0) {
 			popupBrowser.cancel();
 		} else {
 			popupBrowser.commit();
 		}
-	} else if (currentMode == LAUNCH && value > 0) {
+	} else if (currentMode == LAUNCH) {
 		trackBank.sceneBank().getScene(pad).launch();
 	} else if (cursorDevice.exists().get()) {
 		cursorDevice.replaceDeviceInsertionPoint().browse();
@@ -338,10 +406,7 @@ function drumKeyToNote(key) {
 }
 
 
-function setPlayModeExtended() {
-	if (!ignoreModeChange) {
-		ignoreModeChange = true;
-		// Set back to extended mode
+function setPlayMode() {
 		host.getMidiOutPort(1).sendMidi(0x9f, 0x0d, 0x7f);
 		host.showPopupNotification("PLAY mode");
 		currentMode = PLAY;
@@ -349,43 +414,21 @@ function setPlayModeExtended() {
 		for (var i = 0; i < 16; i++) {
 			drumPads[i].invalidate();
 		}
-		host.scheduleTask(function() {
-			ignoreModeChange = false;
-		}, 150);
-	}
 }
 
-function setLaunchMode() {
-	if (!ignoreModeChange) {
-		ignoreModeChange = true;
-		// Set back to extended mode
-		host.getMidiOutPort(1).sendMidi(0x9f, 0x0f, 0x7f);
+function setDrumOrLaunchMode() {
+	host.getMidiOutPort(1).sendMidi(0x9f, 0x0f, 0x7f);
+	if (currentMode == DRUM) {
 		host.showPopupNotification("LAUNCH mode");
 		currentMode = LAUNCH;
 		padsNoteInput.setKeyTranslationTable(translationTableDisabled);
-		for (var i = 0; i < 16; i++) {
-			drumPads[i].invalidate();
-		}
-		host.scheduleTask(function() {
-			ignoreModeChange = false;
-		}, 150);
-	}
-}
-
-function setDrumModeExtended() {
-	if (!ignoreModeChange) {
-		ignoreModeChange = true;
-		// Set back to extended mode
-		host.getMidiOutPort(1).sendMidi(0x9f, 0x0f, 0x7f);
+	} else {
 		host.showPopupNotification("DRUM mode");
 		currentMode = DRUM;
 		padsNoteInput.setKeyTranslationTable(translationTableEnabled);
-		for (var i = 0; i < 16; i++) {
-			drumPads[i].invalidate();
-		}
-		host.scheduleTask(function() {
-			ignoreModeChange = false;
-		}, 150);
+	}
+	for (var i = 0; i < 16; i++) {
+		drumPads[i].invalidate();
 	}
 }
 
@@ -448,18 +491,6 @@ function flush() {
 			var track = trackBank.getItemAt(column);
 			var slot = track.clipLauncherSlotBank().getItemAt(row);
 
-			if (slot.isRecording().get()) {
-				drumPads[i].setColor(red);
-			} else if (slot.isPlaying().get()) {
-				drumPads[i].setColor(white);
-			} else if (slot.hasContent().get()) {
-				var color = getColorIndexClosestToColorRGB(slot.color().get());
-				drumPads[i].setColor(color);
-			} else if (track.arm().get()) {
-				drumPads[i].setColor(redLow);
-			} else {
-				drumPads[i].setColor(offColor);
-			}
 			if (blink) {
 				if (slot.isStopQueued().get()) {
 					drumPads[i].setColor(track.arm().get() ? redLow : offColor);
@@ -467,6 +498,19 @@ function flush() {
 					drumPads[i].setColor(slot.isPlaying().get() ? grey : white);
 				} else if (slot.isRecordingQueued().get()) {
 					drumPads[i].setColor(slot.isRecording().get() ? redLow : red);
+				} else if (track.arm().get()) {
+					drumPads[i].setColor(redLow);
+				} else {
+					drumPads[i].setColor(offColor);
+				}
+			} else {
+				if (slot.isRecording().get()) {
+					drumPads[i].setColor(red);
+				} else if (slot.isPlaying().get()) {
+					drumPads[i].setColor(white);
+				} else if (slot.hasContent().get()) {
+					var color = getColorIndexClosestToColorRGB(slot.color().get());
+					drumPads[i].setColor(color);
 				} else if (track.arm().get()) {
 					drumPads[i].setColor(redLow);
 				} else {
