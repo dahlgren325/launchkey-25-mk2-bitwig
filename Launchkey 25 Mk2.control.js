@@ -25,6 +25,9 @@ var blinkRate = 200;
 var translationTableEnabled;
 var translationTableDisabled;
 var hardwareSurface;
+var inControl1Pressed = false;
+var skipSwitchMode = false;
+var masterVolumeSlider;
 
 // Remove this if you want to be able to use deprecated methods without causing script to stop.
 // This is useful during development.
@@ -112,6 +115,8 @@ function init() {
 	for (var i = 0; i < 8; i++) {
 		var track = trackBank.getItemAt(i);
 		track.arm().markInterested();
+		track.exists().markInterested();
+		track.color().markInterested();
 	}
 	for (var i = 0; i < 16; i++) {
 		var column = i & 0x07;
@@ -138,7 +143,7 @@ function createHardware(midiIn1) {
 	// Hardware
 	hardwareSurface = host.createHardwareSurface();
 
-	var masterVolumeSlider = hardwareSurface.createHardwareSlider("MASTER_VOLUME");
+	masterVolumeSlider = hardwareSurface.createHardwareSlider("MASTER_VOLUME");
 	masterVolumeSlider.setAdjustValueMatcher(midiIn1.createAbsoluteCCValueMatcher(0, 7));
 	masterVolumeSlider.setBinding(masterTrack.volume());
 
@@ -275,7 +280,23 @@ function createDrumPadNoteTranslationTable(enabled) {
 function onMidi1(status, data1, data2) {
 	//println("Midi 1");
 	//printMidi(status, data1, data2);
-	if (isDrumPadMidiEvent(status, data1, data2)) {
+	if (status == 0x9f && data1 == 0x10) {
+		if (popupBrowser.exists().get()) {
+			return;
+		}
+		inControl1Pressed = data2 != 0x00;
+		if (inControl1Pressed) {
+			padsNoteInput.setKeyTranslationTable(translationTableDisabled);
+			masterVolumeSlider.setBinding(cursorTrack.volume());
+			roundPads[0].setColor(9);
+			roundPads[1].setColor(13);
+		} else {
+			padsNoteInput.setKeyTranslationTable(translationTableEnabled);
+			masterVolumeSlider.setBinding(masterTrack.volume());
+			roundPads[0].setColor(72);
+			roundPads[1].setColor(21);
+		}
+	} else if (isDrumPadMidiEvent(status, data1, data2)) {
 		onSquarePad(status, data1, data2);
 	}
 }
@@ -285,6 +306,27 @@ function isDrumPadMidiEvent(status, data1, data2) {
 }
 
 function onSquarePad(status, data1, data2) {
+	if (inControl1Pressed) {
+		if (data2 == 0) {
+			return;
+		}
+		var column = data1 - 112;
+		var row = 1;
+		if (data1 < 104) {
+			column = data1 - 96;
+			row = 0;
+		}
+		var track = trackBank.getItemAt(column);
+		if (track.exists().get()) {
+			if (row == 0) {
+				track.selectInMixer();
+			} else {
+				track.solo().toggle();
+			}
+		}
+		skipSwitchMode = true;
+		return;
+	}
 	if (currentMode == PLAY) {
 		if (popupBrowser.exists().get()) {
 			if (data2 > 0) {
@@ -343,35 +385,51 @@ function nextScene() {
 }
 
 function previousTrack() {
-	if (currentMode == LAUNCH) {
+	if (currentMode == LAUNCH && !inControl1Pressed) {
 		trackBank.sceneBank().scrollPageBackwards();
 	} else {
 		if (popupBrowser.exists().get()) {
 			popupBrowser.selectPreviousFile();
 		} else {
 			cursorTrack.selectPrevious();
+			if (inControl1Pressed) {
+				skipSwitchMode = true;
+			}
 		}
 	}
 }
 
 function nextTrack() {
-	if (currentMode == LAUNCH) {
+	if (currentMode == LAUNCH && !inControl1Pressed) {
 		trackBank.sceneBank().scrollPageForwards();
 	} else {
 		if (popupBrowser.exists().get()) {
 			popupBrowser.selectNextFile();
 		} else {
 			cursorTrack.selectNext();
+			if (inControl1Pressed) {
+				skipSwitchMode = true;
+			}
 		}
 	}
 }
 
 function onRoundPad1() {
-	onRoundPad(0);
+	if (inControl1Pressed) {
+		cursorTrack.mute().toggle();
+		skipSwitchMode = true;
+	} else {
+		onRoundPad(0);
+	}
 }
 
 function onRoundPad2() {
-	onRoundPad(1);
+	if (inControl1Pressed) {
+		cursorTrack.solo().toggle();
+		skipSwitchMode = true;
+	} else {
+		onRoundPad(1);
+	}
 }
 
 function onRoundPad(pad) {
@@ -408,6 +466,10 @@ function drumKeyToNote(key) {
 
 function setPlayMode() {
 		host.getMidiOutPort(1).sendMidi(0x9f, 0x0d, 0x7f);
+		if (skipSwitchMode) {
+			skipSwitchMode = false;
+			return;
+		}
 		host.showPopupNotification("PLAY mode");
 		currentMode = PLAY;
 		padsNoteInput.setKeyTranslationTable(translationTableDisabled);
@@ -433,7 +495,22 @@ function setDrumOrLaunchMode() {
 }
 
 function flush() {
-	if (currentMode == DRUM) {
+	if (inControl1Pressed) {
+		var yellow = 13;
+		var offColor = 0;
+		for (var i = 0; i < 8; i++) {
+			var track = trackBank.getItemAt(i);
+			if (track.exists().get()) {
+				drumPads[i].setColor(getColorIndexClosestToColorRGB(track.color().get()));
+				drumPads[i + 8].setColor(yellow);
+			} else {
+				drumPads[i].setColor(offColor);
+				drumPads[i + 8].setColor(offColor);
+			}
+			drumPads[i].flush();
+			drumPads[i + 8].flush();
+		}
+	} else if (currentMode == DRUM) {
 		var white = 3;
 		var offColor = 0;
 		for (var i = 0; i < 16; i++) {
@@ -521,7 +598,7 @@ function flush() {
 		}
 	}
 
-	if (popupBrowser.exists().get()) {
+	if (popupBrowser.exists().get() || inControl1Pressed) {
 		roundPads[0].turnOn();
 		roundPads[1].turnOn();
 		roundPads[0].flush();
