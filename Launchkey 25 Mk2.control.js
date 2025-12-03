@@ -280,7 +280,7 @@ function createDrumPadNoteTranslationTable(enabled) {
 function onMidi1(status, data1, data2) {
 	//println("Midi 1");
 	//printMidi(status, data1, data2);
-	if (status == 0x9f && data1 == 0x10) {
+	if (status == 0x9f && data1 == 0x10) { // InControl 1 hold
 		if (popupBrowser.exists().get()) {
 			return;
 		}
@@ -295,6 +295,7 @@ function onMidi1(status, data1, data2) {
 			masterVolumeSlider.setBinding(masterTrack.volume());
 			roundPads[0].setColor(72);
 			roundPads[1].setColor(21);
+			skipSwitchMode = false;
 		}
 	} else if (isDrumPadMidiEvent(status, data1, data2)) {
 		onSquarePad(status, data1, data2);
