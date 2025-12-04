@@ -19,7 +19,9 @@ var knobColorsOff = [7, 11, 15, 19, 31, 43, 51, 59];
 var remoteControls;
 var deviceBank;
 var isCursorDevice;
-var trackBank;
+var trackBankLauncher;
+var trackBankInControl;
+var isCursorTrack;
 var blink = false;
 var blinkRate = 200;
 var translationTableEnabled;
@@ -77,13 +79,17 @@ function init() {
 	drumPadBank = drumDevice.createDrumPadBank(16);
 	remoteControls = cursorDevice.createCursorRemoteControlsPage(8);
 	deviceBank = cursorTrack.createDeviceBank(8);
-	trackBank = host.createTrackBank(8, 0, 2);
+	trackBankLauncher = host.createTrackBank(8, 0, 2);
+	trackBankInControl = host.createTrackBank(8, 0, 0);
+	trackBankInControl.followCursorTrack(cursorTrack);
 
 	// Configuration
 	remoteControls.setHardwareLayout(com.bitwig.extension.controller.api.HardwareControlType.KNOB, 8);
 
 	// Mark interests
 	cursorTrack.color().markInterested();
+	cursorTrack.solo().markInterested();
+	cursorTrack.mute().markInterested();
 	cursorDevice.exists().markInterested();
 	cursorTrack.playingNotes().markInterested();
 	popupBrowser.exists().markInterested();
@@ -112,16 +118,24 @@ function init() {
 		isCursorDevice[i] = device.createEqualsValue(cursorDevice);
 		isCursorDevice[i].markInterested();
 	}
+	isCursorTrack = [];
 	for (var i = 0; i < 8; i++) {
-		var track = trackBank.getItemAt(i);
-		track.arm().markInterested();
+		var track = trackBankInControl.getItemAt(i);
 		track.exists().markInterested();
 		track.color().markInterested();
+		track.solo().markInterested();
+		track.mute().markInterested();
+		isCursorTrack[i] = track.createEqualsValue(cursorTrack);
+		isCursorTrack[i].markInterested();
+	}
+	for (var i = 0; i < 8; i++) {
+		var track = trackBankLauncher.getItemAt(i);
+		track.arm().markInterested();
 	}
 	for (var i = 0; i < 16; i++) {
 		var column = i & 0x07;
 		var row = i >> 3;
-		var track = trackBank.getItemAt(column);
+		var track = trackBankLauncher.getItemAt(column);
 		var slot = track.clipLauncherSlotBank().getItemAt(row);
 		slot.isPlaying().markInterested();
 		slot.hasContent().markInterested();
@@ -286,16 +300,16 @@ function onMidi1(status, data1, data2) {
 		}
 		inControl1Pressed = data2 != 0x00;
 		if (inControl1Pressed) {
-			padsNoteInput.setKeyTranslationTable(translationTableDisabled);
+			if (currentMode == DRUM) {
+				padsNoteInput.setKeyTranslationTable(translationTableDisabled);
+			}
 			masterVolumeSlider.setBinding(cursorTrack.volume());
-			roundPads[0].setColor(9);
-			roundPads[1].setColor(13);
-		} else {
-			padsNoteInput.setKeyTranslationTable(translationTableEnabled);
-			masterVolumeSlider.setBinding(masterTrack.volume());
-			roundPads[0].setColor(72);
-			roundPads[1].setColor(21);
 			skipSwitchMode = false;
+		} else {
+			if (currentMode == DRUM) {
+				padsNoteInput.setKeyTranslationTable(translationTableEnabled);
+			}
+			masterVolumeSlider.setBinding(masterTrack.volume());
 		}
 	} else if (isDrumPadMidiEvent(status, data1, data2)) {
 		onSquarePad(status, data1, data2);
@@ -317,7 +331,7 @@ function onSquarePad(status, data1, data2) {
 			column = data1 - 96;
 			row = 0;
 		}
-		var track = trackBank.getItemAt(column);
+		var track = trackBankInControl.getItemAt(column);
 		if (track.exists().get()) {
 			if (row == 0) {
 				track.selectInMixer();
@@ -352,14 +366,14 @@ function onSquarePad(status, data1, data2) {
 			column = data1 - 112;
 			row = 1;
 		}
-		var slot = trackBank.getItemAt(column).clipLauncherSlotBank().getItemAt(row);
+		var slot = trackBankLauncher.getItemAt(column).clipLauncherSlotBank().getItemAt(row);
 		slot.launch();
 	}
 }
 
 function previousScene() {
 	if (currentMode == LAUNCH) {
-		trackBank.sceneBank().scrollBackwards();
+		trackBankLauncher.sceneBank().scrollBackwards();
 	} else {
 		if (popupBrowser.exists().get()) {
 			for (var i = 0; i < 20; i++) {
@@ -373,21 +387,21 @@ function previousScene() {
 
 function nextScene() {
 	if (currentMode == LAUNCH) {
-		trackBank.sceneBank().scrollForwards();
+		trackBankLauncher.sceneBank().scrollForwards();
 	} else {
 		if (popupBrowser.exists().get()) {
 			for (var i = 0; i < 20; i++) {
 				popupBrowser.selectNextFile();
 			}
 		} else {
-		transport.fastForward();
+			transport.fastForward();
 		}
 	}
 }
 
 function previousTrack() {
 	if (currentMode == LAUNCH && !inControl1Pressed) {
-		trackBank.sceneBank().scrollPageBackwards();
+		trackBankLauncher.sceneBank().scrollPageBackwards();
 	} else {
 		if (popupBrowser.exists().get()) {
 			popupBrowser.selectPreviousFile();
@@ -402,7 +416,7 @@ function previousTrack() {
 
 function nextTrack() {
 	if (currentMode == LAUNCH && !inControl1Pressed) {
-		trackBank.sceneBank().scrollPageForwards();
+		trackBankLauncher.sceneBank().scrollPageForwards();
 	} else {
 		if (popupBrowser.exists().get()) {
 			popupBrowser.selectNextFile();
@@ -441,7 +455,7 @@ function onRoundPad(pad) {
 			popupBrowser.commit();
 		}
 	} else if (currentMode == LAUNCH) {
-		trackBank.sceneBank().getScene(pad).launch();
+		trackBankLauncher.sceneBank().getScene(pad).launch();
 	} else if (cursorDevice.exists().get()) {
 		cursorDevice.replaceDeviceInsertionPoint().browse();
 	} else {
@@ -494,16 +508,30 @@ function setDrumOrLaunchMode() {
 		drumPads[i].invalidate();
 	}
 }
-
 function flush() {
 	if (inControl1Pressed) {
 		var yellow = 13;
+		var yellowLow = 12;
 		var offColor = 0;
 		for (var i = 0; i < 8; i++) {
-			var track = trackBank.getItemAt(i);
+			var track = trackBankInControl.getItemAt(i);
 			if (track.exists().get()) {
-				drumPads[i].setColor(getColorIndexClosestToColorRGB(track.color().get()));
-				drumPads[i + 8].setColor(yellow);
+				if (isCursorTrack[i].get()) {
+					if (track.solo().get()) {
+						drumPads[i + 8].setColor(73);
+					} else {
+						drumPads[i + 8].setColor(75);
+					}
+				} else if (track.solo().get()) {
+					drumPads[i + 8].setColor(yellow);
+				} else {
+					drumPads[i + 8].setColor(yellowLow);
+				}
+				if (track.mute().get()) {
+					drumPads[i].setColor(47);
+				} else {
+					drumPads[i].setColor(getColorIndexClosestToColorRGB(track.color().get()));
+				}
 			} else {
 				drumPads[i].setColor(offColor);
 				drumPads[i + 8].setColor(offColor);
@@ -566,7 +594,7 @@ function flush() {
 		for (var i = 0; i < 16; i++) {
 			var column = i & 0x07;
 			var row = i >> 3;
-			var track = trackBank.getItemAt(column);
+			var track = trackBankLauncher.getItemAt(column);
 			var slot = track.clipLauncherSlotBank().getItemAt(row);
 
 			if (blink) {
@@ -599,7 +627,26 @@ function flush() {
 		}
 	}
 
-	if (popupBrowser.exists().get() || inControl1Pressed) {
+	if (inControl1Pressed) {
+		var yellow = 13;
+		var yellowLow = 12;
+		if (cursorTrack.mute().get()) {
+			roundPads[0].setColor(9);
+		} else {
+			roundPads[0].setColor(98);
+		}
+		if (cursorTrack.solo().get()) {
+			roundPads[1].setColor(yellow);
+		} else {
+			roundPads[1].setColor(yellowLow);
+		}
+		roundPads[0].turnOn();
+		roundPads[1].turnOn();
+		roundPads[0].flush();
+		roundPads[1].flush();
+	} else if (popupBrowser.exists().get()) {
+		roundPads[0].setColor(72);
+		roundPads[1].setColor(21);
 		roundPads[0].turnOn();
 		roundPads[1].turnOn();
 		roundPads[0].flush();
